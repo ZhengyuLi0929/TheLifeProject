@@ -37,7 +37,8 @@ const TEXT_FADE_DELAY_MS = 500;
 
 /** 星期页邻格淡入（2/5） */
 const LIFE_CLUSTER_SIDE_MS = 1400;
-/** 3/5：整网已显现后略停，再绕网格中心 zoom out（避免从左扫入） */
+/** 3/5：以中点附近发光格为中心 zoom out（≈4000 格的第 2000 格） */
+const DEMO_CURRENT_WEEK = 2000;
 const LIFE_ZOOM_MS = 3200;
 const LIFE_GRID_HOLD_MS = 450;
 const LIFE_ZOOM_MARGIN = 10;
@@ -177,13 +178,17 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const registerOpacity = useRef(new Animated.Value(0)).current;
 
   const pulse = usePulse(slide <= 2);
-  const demoCurrentWeek = Math.min(Math.floor(LIFE_WEEKS * 0.46), LIFE_WEEKS - 1);
+  const demoCurrentWeek = Math.min(DEMO_CURRENT_WEEK, LIFE_WEEKS - 1);
   const lifeRows = Math.ceil(LIFE_WEEKS / LIFE_COLS);
   const lifeContentH = lifeRows * lifeStride;
+  const focalCol = demoCurrentWeek % LIFE_COLS;
+  const focalRow = Math.floor(demoCurrentWeek / LIFE_COLS);
+  const focalX = focalCol * lifeStride + lifeStride / 2;
+  const focalY = focalRow * lifeStride + lifeStride / 2;
   const gridCenterX = lifeGridWidth / 2;
   const gridCenterY = lifeContentH / 2;
 
-  /** 缩放聚焦点 = 整网几何中心，固定在视口正中（只动画 scale，不平移） */
+  /** 裁剪区正中（勿与 flex 居中叠用，transform 单独定位） */
   const zoomPivotX = gridClipSize.w > 0 ? gridClipSize.w / 2 : width / 2;
   const zoomPivotY = gridClipSize.h > 0 ? gridClipSize.h / 2 : height * 0.4;
 
@@ -191,15 +196,36 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     const { w: clipW, h: clipH } = gridClipSize;
     if (clipW < 40 || clipH < 80) return 1;
     const m = rs(LIFE_ZOOM_MARGIN);
-    const fitX = (clipW / 2 - m) / gridCenterX;
-    const fitY = (clipH / 2 - m) / gridCenterY;
+    const px = zoomPivotX;
+    const py = zoomPivotY;
+    const fitX = Math.min((px - m) / focalX, (clipW - px - m) / (lifeGridWidth - focalX));
+    const fitY = Math.min((py - m) / focalY, (clipH - py - m) / (lifeContentH - focalY));
     const fit = Math.min(fitX, fitY, 1);
     return Number.isFinite(fit) && fit > 0 ? fit : 1;
-  }, [gridCenterX, gridCenterY, gridClipSize, rs]);
+  }, [focalX, focalY, gridClipSize, lifeContentH, lifeGridWidth, rs, zoomPivotX, zoomPivotY]);
 
   const gridScale = useMemo(
     () => zoomProgress.interpolate({ inputRange: [0, 1], outputRange: [zoomScaleStart, zoomScaleEnd] }),
     [zoomProgress, zoomScaleEnd, zoomScaleStart]
+  );
+
+  /** 起点：发光格在视口正中；终点：整网几何中心对齐视口（绕发光格 scale） */
+  const gridTranslateX = useMemo(
+    () =>
+      zoomProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [zoomPivotX, zoomPivotX + zoomScaleEnd * (focalX - gridCenterX)],
+      }),
+    [focalX, gridCenterX, zoomPivotX, zoomProgress, zoomScaleEnd]
+  );
+
+  const gridTranslateY = useMemo(
+    () =>
+      zoomProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [zoomPivotY, zoomPivotY + zoomScaleEnd * (focalY - gridCenterY)],
+      }),
+    [focalY, gridCenterY, zoomPivotY, zoomProgress, zoomScaleEnd]
   );
 
   const lifeAnimStartedRef = useRef(false);
@@ -296,7 +322,7 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     return () => clearTimeout(mergeTimer);
   }, [slide, mergeAnims, mergeOpacity, weekSideOpacity, weekTextOpacity]);
 
-  // 3/5：整网几何中心固定在视口正中，仅 scale zoom out
+  // 3/5：发光格（第 2000 周）在视口正中，绕其中心 zoom out
   useEffect(() => {
     if (slide !== 2) {
       lifeAnimStartedRef.current = false;
@@ -412,7 +438,7 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
           </View>
         )}
 
-        {/* Slide 2 — 3/5：整网中心对齐视口，绕中心 zoom out */}
+        {/* Slide 2 — 3/5：绕第 2000 格发光中心 zoom out，文案在下方 */}
         {slide === 2 && (
           <View style={styles.lifeStage}>
             <View
@@ -426,14 +452,17 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
             >
               <Animated.View
                 style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
                   width: lifeGridWidth,
                   height: lifeContentH,
                   transform: [
-                    { translateX: zoomPivotX },
-                    { translateY: zoomPivotY },
+                    { translateX: gridTranslateX },
+                    { translateY: gridTranslateY },
                     { scale: gridScale },
-                    { translateX: -gridCenterX },
-                    { translateY: -gridCenterY },
+                    { translateX: -focalX },
+                    { translateY: -focalY },
                   ],
                 }}
               >
@@ -451,14 +480,15 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
                 />
               </Animated.View>
             </View>
-            {slide === 2 && lifePhase === 'text' && (
-              <Animated.View style={[styles.lifeTextBlock, { opacity: lifeTextOpacity }]}>
-                <Text style={styles.lifeCaption}>4000 个这样的星期，就组成了人的一生。</Text>
-                <Text style={styles.lifeFootnote}>
-                  注：中国人 2026 年的预期寿命为 79.25 岁，即约 4135 个星期。
-                </Text>
-              </Animated.View>
-            )}
+            <Animated.View
+              pointerEvents={lifePhase === 'text' ? 'auto' : 'none'}
+              style={[styles.lifeTextBlock, { opacity: lifePhase === 'text' ? lifeTextOpacity : 0 }]}
+            >
+              <Text style={styles.lifeCaption}>4000 个这样的星期，就组成了人的一生。</Text>
+              <Text style={styles.lifeFootnote}>
+                注：中国人 2026 年的预期寿命为 79.25 岁，即约 4135 个星期。
+              </Text>
+            </Animated.View>
           </View>
         )}
 
@@ -538,8 +568,9 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   );
 }
 
-const createStyles = (rs: (v: number) => number, rf: (v: number) => number) =>
-  StyleSheet.create({
+const createStyles = (rs: (v: number) => number, rf: (v: number) => number) => {
+  const lifeTextReserve = rs(10) + rs(6) + rf(22) + rs(8) + rf(16) + rs(4);
+  return StyleSheet.create({
     root: { flex: 1, backgroundColor: '#000000' },
     header: {
       paddingHorizontal: rs(24),
@@ -568,12 +599,32 @@ const createStyles = (rs: (v: number) => number, rf: (v: number) => number) =>
       lineHeight: rf(28),
       letterSpacing: 0.3,
     },
-    lifeStage: { flex: 1, width: '100%' },
+    lifeStage: {
+      flex: 1,
+      width: '100%',
+      position: 'relative',
+    },
     lifeZoomClip: {
-      ...StyleSheet.absoluteFillObject,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: lifeTextReserve,
       overflow: 'hidden',
     },
-    lifeTextBlock: { paddingVertical: rs(14), paddingHorizontal: rs(8), alignItems: 'center', gap: rs(8) },
+    lifeTextBlock: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: lifeTextReserve,
+      paddingTop: rs(10),
+      paddingBottom: rs(6),
+      paddingHorizontal: rs(8),
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: rs(8),
+    },
     lifeCaption: {
       color: '#DEE6E2',
       fontSize: rf(15),
@@ -627,3 +678,4 @@ const createStyles = (rs: (v: number) => number, rf: (v: number) => number) =>
       fontSize: rf(16),
     },
   });
+};
