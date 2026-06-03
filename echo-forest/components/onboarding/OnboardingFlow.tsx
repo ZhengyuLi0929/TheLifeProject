@@ -185,10 +185,8 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const focalRow = Math.floor(demoCurrentWeek / LIFE_COLS);
   const focalX = focalCol * lifeStride + lifeStride / 2;
   const focalY = focalRow * lifeStride + lifeStride / 2;
-  const gridCenterX = lifeGridWidth / 2;
-  const gridCenterY = lifeContentH / 2;
 
-  /** 裁剪区正中（勿与 flex 居中叠用，transform 单独定位） */
+  /** 发光格锚点 = 裁剪区正中（全程不变，只缩放） */
   const zoomPivotX = gridClipSize.w > 0 ? gridClipSize.w / 2 : width / 2;
   const zoomPivotY = gridClipSize.h > 0 ? gridClipSize.h / 2 : height * 0.4;
 
@@ -209,24 +207,9 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     [zoomProgress, zoomScaleEnd, zoomScaleStart]
   );
 
-  /** 起点：发光格在视口正中；终点：整网几何中心对齐视口（绕发光格 scale） */
-  const gridTranslateX = useMemo(
-    () =>
-      zoomProgress.interpolate({
-        inputRange: [0, 1],
-        outputRange: [zoomPivotX, zoomPivotX + zoomScaleEnd * (focalX - gridCenterX)],
-      }),
-    [focalX, gridCenterX, zoomPivotX, zoomProgress, zoomScaleEnd]
-  );
-
-  const gridTranslateY = useMemo(
-    () =>
-      zoomProgress.interpolate({
-        inputRange: [0, 1],
-        outputRange: [zoomPivotY, zoomPivotY + zoomScaleEnd * (focalY - gridCenterY)],
-      }),
-    [focalY, gridCenterY, zoomPivotY, zoomProgress, zoomScaleEnd]
-  );
+  /** 发光格中心对齐视口正中；scale 绕该格（transformOrigin 须 3 个数） */
+  const gridOffsetX = zoomPivotX - focalX;
+  const gridOffsetY = zoomPivotY - focalY;
 
   const lifeAnimStartedRef = useRef(false);
 
@@ -457,12 +440,11 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
                   top: 0,
                   width: lifeGridWidth,
                   height: lifeContentH,
+                  transformOrigin: [focalX, focalY, 0],
                   transform: [
-                    { translateX: gridTranslateX },
-                    { translateY: gridTranslateY },
+                    { translateX: gridOffsetX },
+                    { translateY: gridOffsetY },
                     { scale: gridScale },
-                    { translateX: -focalX },
-                    { translateY: -focalY },
                   ],
                 }}
               >
@@ -632,7 +614,7 @@ const createStyles = (rs: (v: number) => number, rf: (v: number) => number) => {
       textAlign: 'center',
       lineHeight: rf(22),
     },
-    lifeFootnote: { color: '#7A8A82', fontSize: rf(11), textAlign: 'center', lineHeight: rf(16) },
+    lifeFootnote: { color: '#6E7E76', fontSize: rf(8), textAlign: 'center', lineHeight: rf(12) },
     quoteStage: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: rs(12), gap: rs(18) },
     quoteLine: {
       color: '#DEE6E2',

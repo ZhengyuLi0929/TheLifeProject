@@ -41,6 +41,7 @@ export function OnboardingLifeGridSvg({
   lifeStride,
   lifeGap,
   lifeBlockSize,
+  showGlow = true,
   pulse,
   rs,
 }: {
@@ -52,7 +53,8 @@ export function OnboardingLifeGridSvg({
   lifeStride: number;
   lifeGap: number;
   lifeBlockSize: number;
-  pulse: Animated.Value;
+  showGlow?: boolean;
+  pulse?: Animated.Value;
   rs: (n: number) => number;
 }) {
   const { pastPath, futurePath } = useMemo(
@@ -83,18 +85,20 @@ export function OnboardingLifeGridSvg({
         {pastPath.length > 0 && <Path d={pastPath} fill={PAST_FILL} />}
         {futurePath.length > 0 && <Path d={futurePath} fill={FUTURE_FILL} />}
       </Svg>
-      <View
-        style={{
-          position: 'absolute',
-          left: glowLeft,
-          top: glowTop,
-          width: lifeBlockSize,
-          height: lifeBlockSize,
-        }}
-        pointerEvents="none"
-      >
-        <Animated.View style={{ ...glowInner, opacity: pulse }} />
-      </View>
+      {showGlow && pulse != null && (
+        <View
+          style={{
+            position: 'absolute',
+            left: glowLeft,
+            top: glowTop,
+            width: lifeBlockSize,
+            height: lifeBlockSize,
+          }}
+          pointerEvents="none"
+        >
+          <Animated.View style={{ ...glowInner, opacity: pulse }} />
+        </View>
+      )}
     </View>
   );
 }
