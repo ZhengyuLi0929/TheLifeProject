@@ -37,11 +37,13 @@ const TEXT_FADE_DELAY_MS = 500;
 
 /** 星期页邻格淡入（2/5） */
 const LIFE_CLUSTER_SIDE_MS = 1400;
-/** 3/5：以中点附近发光格为中心 zoom out（≈4000 格的第 2000 格） */
-const DEMO_CURRENT_WEEK = 2000;
+/** 3/5：发光格周下标（81×52 时 LIFE_WEEKS/2 即几何中心周） */
+const DEMO_CURRENT_WEEK = Math.floor(LIFE_WEEKS / 2);
 const LIFE_ZOOM_MS = 3200;
 const LIFE_GRID_HOLD_MS = 450;
 const LIFE_ZOOM_MARGIN = 10;
+/** 整网水平微调（负值 = 往左） */
+const LIFE_GRID_NUDGE_X = 0;
 
 const fadeInText = (opacity: Animated.Value, delay = TEXT_FADE_DELAY_MS) =>
   Animated.sequence([
@@ -153,7 +155,8 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const lifeGrid = useMemo(() => computeLifeGridMetrics(width, rs), [width, rs]);
+  const gridLayoutWidth = width - rs(20) * 2;
+  const lifeGrid = useMemo(() => computeLifeGridMetrics(gridLayoutWidth, rs), [gridLayoutWidth, rs]);
   const { lifeGap, lifeBlockSize, lifeStride, lifeGridWidth } = lifeGrid;
   const weekGap = rs(6);
   const weekSquareSize = useMemo(
@@ -181,35 +184,46 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const demoCurrentWeek = Math.min(DEMO_CURRENT_WEEK, LIFE_WEEKS - 1);
   const lifeRows = Math.ceil(LIFE_WEEKS / LIFE_COLS);
   const lifeContentH = lifeRows * lifeStride;
-  const focalCol = demoCurrentWeek % LIFE_COLS;
-  const focalRow = Math.floor(demoCurrentWeek / LIFE_COLS);
-  const focalX = focalCol * lifeStride + lifeStride / 2;
-  const focalY = focalRow * lifeStride + lifeStride / 2;
+  /** 缩放锚点用网格几何中心（≠某一格中心，否则 52 列时会偏半格） */
+  const anchorX = lifeGridWidth / 2;
+  const anchorY = lifeContentH / 2;
 
-  /** 发光格锚点 = 裁剪区正中（全程不变，只缩放） */
-  const zoomPivotX = gridClipSize.w > 0 ? gridClipSize.w / 2 : width / 2;
+  const zoomPivotX = gridClipSize.w > 0 ? gridClipSize.w / 2 : gridLayoutWidth / 2;
   const zoomPivotY = gridClipSize.h > 0 ? gridClipSize.h / 2 : height * 0.4;
 
   const zoomScaleEnd = useMemo(() => {
     const { w: clipW, h: clipH } = gridClipSize;
     if (clipW < 40 || clipH < 80) return 1;
     const m = rs(LIFE_ZOOM_MARGIN);
-    const px = zoomPivotX;
-    const py = zoomPivotY;
-    const fitX = Math.min((px - m) / focalX, (clipW - px - m) / (lifeGridWidth - focalX));
-    const fitY = Math.min((py - m) / focalY, (clipH - py - m) / (lifeContentH - focalY));
+    const fitX = (clipW - m * 2) / lifeGridWidth;
+    const fitY = (clipH - m * 2) / lifeContentH;
     const fit = Math.min(fitX, fitY, 1);
     return Number.isFinite(fit) && fit > 0 ? fit : 1;
-  }, [focalX, focalY, gridClipSize, lifeContentH, lifeGridWidth, rs, zoomPivotX, zoomPivotY]);
+  }, [gridClipSize, lifeContentH, lifeGridWidth, rs]);
 
   const gridScale = useMemo(
     () => zoomProgress.interpolate({ inputRange: [0, 1], outputRange: [zoomScaleStart, zoomScaleEnd] }),
     [zoomProgress, zoomScaleEnd, zoomScaleStart]
   );
 
-  /** 发光格中心对齐视口正中；scale 绕该格（transformOrigin 须 3 个数） */
-  const gridOffsetX = zoomPivotX - focalX;
-  const gridOffsetY = zoomPivotY - focalY;
+  /** screen(p) = pivot + scale×(p − anchor)；锚点始终在裁剪区正中 */
+  const gridTranslateX = useMemo(
+    () =>
+      zoomProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [zoomPivotX - zoomScaleStart * anchorX, zoomPivotX - zoomScaleEnd * anchorX],
+      }),
+    [anchorX, zoomPivotX, zoomProgress, zoomScaleEnd, zoomScaleStart]
+  );
+
+  const gridTranslateY = useMemo(
+    () =>
+      zoomProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [zoomPivotY - zoomScaleStart * anchorY, zoomPivotY - zoomScaleEnd * anchorY],
+      }),
+    [anchorY, zoomPivotY, zoomProgress, zoomScaleEnd, zoomScaleStart]
+  );
 
   const lifeAnimStartedRef = useRef(false);
 
@@ -305,7 +319,7 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     return () => clearTimeout(mergeTimer);
   }, [slide, mergeAnims, mergeOpacity, weekSideOpacity, weekTextOpacity]);
 
-  // 3/5：发光格（第 2000 周）在视口正中，绕其中心 zoom out
+  // 3/5：发光格在视口正中，绕其中心 zoom out
   useEffect(() => {
     if (slide !== 2) {
       lifeAnimStartedRef.current = false;
@@ -421,7 +435,7 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
           </View>
         )}
 
-        {/* Slide 2 — 3/5：绕第 2000 格发光中心 zoom out，文案在下方 */}
+        {/* Slide 2 — 3/5：绕当前周发光中心 zoom out，文案在下方 */}
         {slide === 2 && (
           <View style={styles.lifeStage}>
             <View
@@ -440,10 +454,10 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
                   top: 0,
                   width: lifeGridWidth,
                   height: lifeContentH,
-                  transformOrigin: [focalX, focalY, 0],
+                  transformOrigin: [0, 0, 0],
                   transform: [
-                    { translateX: gridOffsetX },
-                    { translateY: gridOffsetY },
+                    { translateX: Animated.add(gridTranslateX, LIFE_GRID_NUDGE_X) },
+                    { translateY: gridTranslateY },
                     { scale: gridScale },
                   ],
                 }}

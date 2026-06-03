@@ -1,6 +1,6 @@
 import type { Milestone, WeekRecord } from './types';
 
-export const LIFE_WEEKS = 84 * 52;
+export const LIFE_WEEKS = 81 * 52;
 const WEEK_MS = 1000 * 60 * 60 * 24 * 7;
 
 export const parseDate = (value: string): Date | null => {
