@@ -3,7 +3,6 @@ import {
   Alert,
   Animated,
   Easing,
-  FlatList,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -16,10 +15,10 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colorForWeekCell } from '../../lib/completionColors';
 import { completeOnboardingRegistration, markOnboardingSkipped } from '../../lib/onboardingStorage';
 import { LIFE_WEEKS, parseDate } from '../../lib/weekMath';
 import { BirthDatePicker } from './BirthDatePicker';
+import { OnboardingLifeGridSvg } from './OnboardingLifeGridSvg';
 import { OnboardingFooter } from './OnboardingFooter';
 
 type Slide = 0 | 1 | 2 | 3 | 4;
@@ -36,12 +35,12 @@ const LIFE_COLS = 52;
 const TEXT_FADE_MS = 1400;
 const TEXT_FADE_DELAY_MS = 500;
 
-/** 人生视角三阶段时长 */
+/** 星期页邻格淡入（2/5） */
 const LIFE_CLUSTER_SIDE_MS = 1400;
-const LIFE_CLUSTER_HOLD_MS = 900;
-const LIFE_ZOOM_MS = 2800;
-const LIFE_GRID_REVEAL_MS = 500;
-const LIFE_GRID_HOLD_MS = 800;
+/** 3/5：整网已显现后略停，再绕网格中心 zoom out（避免从左扫入） */
+const LIFE_ZOOM_MS = 3200;
+const LIFE_GRID_HOLD_MS = 450;
+const LIFE_ZOOM_MARGIN = 10;
 
 const fadeInText = (opacity: Animated.Value, delay = TEXT_FADE_DELAY_MS) =>
   Animated.sequence([
@@ -145,8 +144,8 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const [slide, setSlide] = useState<Slide>(0);
   const [weekMerged, setWeekMerged] = useState(false);
   const [lifeReady, setLifeReady] = useState(false);
-  const [lifePhase, setLifePhase] = useState<'cluster' | 'zoom' | 'text'>('cluster');
-  const [gridClipH, setGridClipH] = useState(0);
+  const [lifePhase, setLifePhase] = useState<'zoom' | 'text'>('zoom');
+  const [gridClipSize, setGridClipSize] = useState({ w: 0, h: 0 });
   const [birthVisible, setBirthVisible] = useState(false);
   const [birthDate, setBirthDate] = useState('');
   const [name, setName] = useState('');
@@ -170,30 +169,37 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
   const weekTextOpacity = useRef(new Animated.Value(0)).current;
   const mergeAnims = useRef(Array.from({ length: 6 }, () => new Animated.Value(0))).current;
   const mergeOpacity = useRef(new Animated.Value(1)).current;
-  const lifeClusterSideOpacity = useRef(new Animated.Value(0)).current;
-  const lifeFieldOpacity = useRef(new Animated.Value(0)).current;
   const zoomProgress = useRef(new Animated.Value(0)).current;
   const lifeTextOpacity = useRef(new Animated.Value(0)).current;
+  const zoomClipRef = useRef<View>(null);
   const quoteOpacity = useRef(new Animated.Value(0)).current;
   const birthOpacity = useRef(new Animated.Value(0)).current;
   const registerOpacity = useRef(new Animated.Value(0)).current;
-  const lifeListRef = useRef<FlatList<number>>(null);
 
   const pulse = usePulse(slide <= 2);
   const demoCurrentWeek = Math.min(Math.floor(LIFE_WEEKS * 0.46), LIFE_WEEKS - 1);
-  const lifeWeeks = useMemo(() => Array.from({ length: LIFE_WEEKS }, (_, i) => i), []);
   const lifeRows = Math.ceil(LIFE_WEEKS / LIFE_COLS);
   const lifeContentH = lifeRows * lifeStride;
-  const focalCol = demoCurrentWeek % LIFE_COLS;
-  const focalRow = Math.floor(demoCurrentWeek / LIFE_COLS);
-  const focalX = focalCol * lifeStride + lifeStride / 2;
-  const focalY = focalRow * lifeStride + lifeStride / 2;
-  const gridClipCenterY = gridClipH > 0 ? gridClipH / 2 : height * 0.36;
+  const gridCenterX = lifeGridWidth / 2;
+  const gridCenterY = lifeContentH / 2;
 
-  // progress 0→1：以当前周方格为原点缩放，再平移到屏幕中心（避免默认以视图中心缩放导致偏右）
+  /** 缩放聚焦点 = 整网几何中心，固定在视口正中（只动画 scale，不平移） */
+  const zoomPivotX = gridClipSize.w > 0 ? gridClipSize.w / 2 : width / 2;
+  const zoomPivotY = gridClipSize.h > 0 ? gridClipSize.h / 2 : height * 0.4;
+
+  const zoomScaleEnd = useMemo(() => {
+    const { w: clipW, h: clipH } = gridClipSize;
+    if (clipW < 40 || clipH < 80) return 1;
+    const m = rs(LIFE_ZOOM_MARGIN);
+    const fitX = (clipW / 2 - m) / gridCenterX;
+    const fitY = (clipH / 2 - m) / gridCenterY;
+    const fit = Math.min(fitX, fitY, 1);
+    return Number.isFinite(fit) && fit > 0 ? fit : 1;
+  }, [gridCenterX, gridCenterY, gridClipSize, rs]);
+
   const gridScale = useMemo(
-    () => zoomProgress.interpolate({ inputRange: [0, 1], outputRange: [zoomScaleStart, 1] }),
-    [zoomProgress, zoomScaleStart]
+    () => zoomProgress.interpolate({ inputRange: [0, 1], outputRange: [zoomScaleStart, zoomScaleEnd] }),
+    [zoomProgress, zoomScaleEnd, zoomScaleStart]
   );
 
   const lifeAnimStartedRef = useRef(false);
@@ -290,84 +296,41 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     return () => clearTimeout(mergeTimer);
   }, [slide, mergeAnims, mergeOpacity, weekSideOpacity, weekTextOpacity]);
 
-  // Slide 2: ① 中心发光 + 暗淡邻格 ② 锚定中心 zoom out ③ 文案淡入
+  // 3/5：整网几何中心固定在视口正中，仅 scale zoom out
   useEffect(() => {
     if (slide !== 2) {
       lifeAnimStartedRef.current = false;
       return;
     }
-    if (gridClipH < 80 || lifeAnimStartedRef.current) return;
+    if (gridClipSize.h < 80 || lifeAnimStartedRef.current) return;
     lifeAnimStartedRef.current = true;
     setLifeReady(false);
-    setLifePhase('cluster');
-    lifeClusterSideOpacity.setValue(0);
-    lifeFieldOpacity.setValue(0);
+    setLifePhase('zoom');
     lifeTextOpacity.setValue(0);
     zoomProgress.setValue(0);
 
-    const clusterSideAnim = Animated.timing(lifeClusterSideOpacity, {
-      toValue: 1,
-      duration: LIFE_CLUSTER_SIDE_MS,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+    let holdTimer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => {
+      holdTimer = setTimeout(() => {
+        Animated.timing(zoomProgress, {
+          toValue: 1,
+          duration: LIFE_ZOOM_MS,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (!finished) return;
+          setLifePhase('text');
+          setLifeReady(true);
+          fadeInText(lifeTextOpacity, 200).start();
+        });
+      }, LIFE_GRID_HOLD_MS);
     });
 
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    clusterSideAnim.start();
-
-    timers.push(
-      setTimeout(() => {
-        setLifePhase('zoom');
-        lifeClusterSideOpacity.setValue(0);
-        zoomProgress.setValue(0);
-        lifeFieldOpacity.setValue(0);
-
-        const scrollY = Math.max(0, focalY - gridClipCenterY);
-        lifeListRef.current?.scrollToOffset({ offset: scrollY, animated: false });
-
-        // ① 先显现全部方格（大尺寸）
-        Animated.timing(lifeFieldOpacity, {
-          toValue: 1,
-          duration: LIFE_GRID_REVEAL_MS,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }).start();
-
-        // ② 停顿后整体 zoom out，当前周保持在屏幕中心
-        timers.push(
-          setTimeout(() => {
-            Animated.timing(zoomProgress, {
-              toValue: 1,
-              duration: LIFE_ZOOM_MS,
-              easing: Easing.inOut(Easing.cubic),
-              useNativeDriver: true,
-            }).start(({ finished }) => {
-              if (!finished) return;
-              setLifePhase('text');
-              setLifeReady(true);
-              fadeInText(lifeTextOpacity, 200).start();
-            });
-          }, LIFE_GRID_REVEAL_MS + LIFE_GRID_HOLD_MS)
-        );
-      }, LIFE_CLUSTER_SIDE_MS + LIFE_CLUSTER_HOLD_MS)
-    );
-
     return () => {
-      clusterSideAnim.stop();
-      timers.forEach(clearTimeout);
+      cancelAnimationFrame(frame);
+      if (holdTimer) clearTimeout(holdTimer);
     };
-  }, [
-    focalY,
-    gridClipCenterY,
-    lifeClusterSideOpacity,
-    lifeFieldOpacity,
-    lifeTextOpacity,
-    slide,
-    zoomProgress,
-    zoomScaleStart,
-    gridClipH,
-  ]);
+  }, [gridClipSize.h, lifeTextOpacity, slide, zoomProgress]);
 
   // Slide 3: quote then birth
   useEffect(() => {
@@ -391,46 +354,6 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
     registerOpacity.setValue(0);
     fadeInText(registerOpacity, 200).start();
   }, [registerOpacity, slide]);
-
-  const renderLifeCell = useCallback(
-    ({ item: week }: { item: number }) => {
-      const isCurrent = week === demoCurrentWeek;
-      const isFuture = week > demoCurrentWeek;
-      const color = colorForWeekCell({
-        isCurrent,
-        isFuture,
-        beforeProgress: false,
-        completionRate: null,
-      });
-      return (
-        <View style={{ width: lifeStride, height: lifeStride, padding: lifeGap }}>
-          <Animated.View
-            style={{
-              width: lifeBlockSize,
-              height: lifeBlockSize,
-              borderRadius: rs(0.5),
-              backgroundColor: color,
-              opacity: isCurrent ? pulse : 1,
-              borderWidth: isCurrent ? 1 : 0,
-              borderColor: 'rgba(200, 245, 215, 0.55)',
-              shadowColor: isCurrent ? '#C9F8DA' : 'transparent',
-              shadowOpacity: isCurrent ? 0.85 : 0,
-              shadowRadius: isCurrent ? 6 : 0,
-            }}
-          />
-        </View>
-      );
-    },
-    [demoCurrentWeek, lifeBlockSize, lifeGap, lifeStride, pulse, rs]
-  );
-
-  const getLifeItemLayout = useCallback(
-    (_: ArrayLike<number> | null | undefined, index: number) => {
-      const row = Math.floor(index / LIFE_COLS);
-      return { length: lifeStride, offset: row * lifeStride, index };
-    },
-    [lifeStride]
-  );
 
   const weekOffsets = [-3, -2, -1, 1, 2, 3].map((i) => i * weekStride);
 
@@ -489,69 +412,46 @@ export function OnboardingFlow({ onSkip, onComplete }: OnboardingFlowProps) {
           </View>
         )}
 
-        {/* Slide 2 — 中心锚定 · 三阶段人生 zoom */}
+        {/* Slide 2 — 3/5：整网中心对齐视口，绕中心 zoom out */}
         {slide === 2 && (
           <View style={styles.lifeStage}>
             <View
-              style={styles.lifeGridClip}
-              onLayout={(e) => setGridClipH(e.nativeEvent.layout.height)}
+              ref={zoomClipRef}
+              collapsable={false}
+              style={styles.lifeZoomClip}
+              onLayout={(e) => {
+                const { width: w, height: h } = e.nativeEvent.layout;
+                setGridClipSize({ w, h });
+              }}
             >
-              {lifePhase === 'cluster' && (
-                <View style={styles.lifeClusterStage}>
-                  <View style={[styles.weekRow, { width: weekRowWidth, height: weekSquareSize }]}>
-                    {weekOffsets.map((offset, idx) => (
-                      <Animated.View
-                        key={`lc-${idx}`}
-                        style={{
-                          position: 'absolute',
-                          opacity: lifeClusterSideOpacity,
-                          transform: [{ translateX: offset }],
-                        }}
-                      >
-                        <StaticSquare size={weekSquareSize} color="#252E2A" />
-                      </Animated.View>
-                    ))}
-                    <PulsingSquare size={weekSquareSize} pulse={pulse} />
-                  </View>
-                </View>
-              )}
-
-              {lifePhase !== 'cluster' && (
-                <View style={styles.lifeGridCenter} pointerEvents="box-none">
-                  <Animated.View
-                    style={{
-                      width: lifeGridWidth,
-                      height: lifeContentH,
-                      opacity: lifeFieldOpacity,
-                      transform: [
-                        { translateX: width / 2 },
-                        { translateY: gridClipCenterY },
-                        { scale: gridScale },
-                        { translateX: -focalX },
-                        { translateY: -focalY },
-                      ],
-                    }}
-                  >
-                    <FlatList
-                      ref={lifeListRef}
-                      data={lifeWeeks}
-                      keyExtractor={(w) => `ob-${w}`}
-                      numColumns={LIFE_COLS}
-                      renderItem={renderLifeCell}
-                      getItemLayout={getLifeItemLayout}
-                      scrollEnabled={lifeReady}
-                      showsVerticalScrollIndicator={false}
-                      style={{ width: lifeGridWidth, height: lifeContentH }}
-                      initialNumToRender={LIFE_COLS * 14}
-                      maxToRenderPerBatch={LIFE_COLS * 8}
-                      windowSize={9}
-                      removeClippedSubviews={false}
-                    />
-                  </Animated.View>
-                </View>
-              )}
+              <Animated.View
+                style={{
+                  width: lifeGridWidth,
+                  height: lifeContentH,
+                  transform: [
+                    { translateX: zoomPivotX },
+                    { translateY: zoomPivotY },
+                    { scale: gridScale },
+                    { translateX: -gridCenterX },
+                    { translateY: -gridCenterY },
+                  ],
+                }}
+              >
+                <OnboardingLifeGridSvg
+                  totalWeeks={LIFE_WEEKS}
+                  cols={LIFE_COLS}
+                  currentWeek={demoCurrentWeek}
+                  width={lifeGridWidth}
+                  height={lifeContentH}
+                  lifeStride={lifeStride}
+                  lifeGap={lifeGap}
+                  lifeBlockSize={lifeBlockSize}
+                  pulse={pulse}
+                  rs={rs}
+                />
+              </Animated.View>
             </View>
-            {lifePhase === 'text' && (
+            {slide === 2 && lifePhase === 'text' && (
               <Animated.View style={[styles.lifeTextBlock, { opacity: lifeTextOpacity }]}>
                 <Text style={styles.lifeCaption}>4000 个这样的星期，就组成了人的一生。</Text>
                 <Text style={styles.lifeFootnote}>
@@ -668,20 +568,8 @@ const createStyles = (rs: (v: number) => number, rf: (v: number) => number) =>
       lineHeight: rf(28),
       letterSpacing: 0.3,
     },
-    lifeStage: { flex: 1, width: '100%', alignItems: 'center' },
-    lifeGridClip: {
-      flex: 1,
-      width: '100%',
-      overflow: 'hidden',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    lifeClusterStage: {
-      ...StyleSheet.absoluteFillObject,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    lifeGridCenter: {
+    lifeStage: { flex: 1, width: '100%' },
+    lifeZoomClip: {
       ...StyleSheet.absoluteFillObject,
       overflow: 'hidden',
     },
